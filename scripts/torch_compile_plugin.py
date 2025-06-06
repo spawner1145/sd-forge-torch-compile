@@ -159,7 +159,7 @@ class TorchCompile(scripts.Script):
                 mode = gr.Dropdown(
                     label="编译模式", 
                     choices=["default", "reduce-overhead", "max-autotune"], 
-                    value="max-autotune",
+                    value="default",
                     scale=1,
                     interactive=torch_compile_available
                 )
@@ -167,7 +167,7 @@ class TorchCompile(scripts.Script):
             with gr.Row():
                 dynamic = gr.Checkbox(
                     label="动态形状编译", 
-                    value=True,
+                    value=False,
                     info="允许不同的输入形状使用同一个编译模型",
                     interactive=torch_compile_available
                 )
