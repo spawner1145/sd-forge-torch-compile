@@ -112,32 +112,26 @@ class TorchCompile(scripts.Script):
     
     @staticmethod
     def _generate_model_hash(model, compile_kwargs):
-        """生成模型和编译参数的哈希值"""
+        """生成模型和编译参数的哈希值 - 改进版"""
         try:
-            # 模型标识
+            model_filename = "unknown_model"
+            # 优先获取模型文件名作为唯一标识
+            if hasattr(shared, 'sd_model') and hasattr(shared.sd_model, 'sd_checkpoint_info') and hasattr(shared.sd_model.sd_checkpoint_info, 'filename'):
+                model_filename = os.path.basename(shared.sd_model.sd_checkpoint_info.filename)
+
             model_info = {
-                'model_id': id(model),
+                'model_filename': model_filename, # 使用文件名
                 'model_type': type(model).__name__,
-                'model_config': getattr(model, 'config', {}) if hasattr(model, 'config') else {},
-                'compile_kwargs': compile_kwargs
+                # 将字典转换为排序后的字符串，保证哈希一致性
+                'compile_kwargs': str(sorted(compile_kwargs.items()))
             }
-            
-            # 模型特征
-            try:
-                if hasattr(model, 'state_dict'):
-                    param_info = []
-                    for name, param in list(model.state_dict().items())[:5]:
-                        if hasattr(param, 'shape'):
-                            param_info.append((name, tuple(param.shape)))
-                    model_info['param_info'] = param_info
-            except Exception:
-                pass
-            
+
             hash_str = str(sorted(model_info.items()))
             return hashlib.md5(hash_str.encode()).hexdigest()[:12]
-        except Exception:
-            # 如果无法生成详细哈希，使用简单
-            simple_info = f"{id(model)}_{type(model).__name__}_{compile_kwargs}"
+        except Exception as e:
+            logger = TorchCompile.get_logger()
+            logger.warning(f"无法生成基于文件名的哈希，回退到简单哈希: {e}")
+            simple_info = f"{id(model)}_{type(model).__name__}_{str(sorted(compile_kwargs.items()))}"
             return hashlib.md5(simple_info.encode()).hexdigest()[:12]
 
     def title(self):
@@ -609,6 +603,7 @@ class TorchCompile(scripts.Script):
                     return self._compiled_forward(self, *args, **kwargs)
                 except Exception as e:
                     logger.warning(f"编译版本执行失败，回退到原始: {str(e)}")
+                    logger.error(f"详细错误: {traceback.format_exc()}")
                     return TorchCompile.original_flux_forward(self, *args, **kwargs)
             # 添加输入验证
             def _validate_flux_inputs(self, *args, **kwargs):
@@ -822,7 +817,4 @@ class TorchCompile(scripts.Script):
 
     def postprocess(self, p, processed, *args):
         """后处理，清理资源"""
-        enabled = args[0] if args else False
-        
-        if not enabled:
-            self.restore_original_methods()
+        self.restore_original_methods()
