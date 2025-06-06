@@ -1,0 +1,11 @@
+{
+    "default_backend": "inductor",
+    "default_mode": "max-autotune",
+    "default_dynamic": true,
+    "default_fullgraph": false,
+    "default_compile_unet": true,
+    "default_auto_clear": false,
+    "enable_debug_logging": false,
+    "compile_timeout": 300,
+    "max_cache_size": 10
+}
