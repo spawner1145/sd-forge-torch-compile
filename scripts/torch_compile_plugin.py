@@ -11,8 +11,6 @@ from types import MethodType
 from modules import scripts, shared
 from modules.ui_components import InputAccordion
 
-# --- 步骤 1: 确保导入所有必需的模块 ---
-# 尝试导入模型类，并设置可用性标志
 try:
     from backend.nn.flux import IntegratedFluxTransformer2DModel
     FLUX_AVAILABLE = True
@@ -20,7 +18,6 @@ except ImportError:
     FLUX_AVAILABLE = False
     
 try:
-    # 确保这里同时导入了 IntegratedUNet2DConditionModel 和 SpatialTransformer
     from backend.nn.unet import IntegratedUNet2DConditionModel, SpatialTransformer
     UNET_AVAILABLE = True
     SPATIAL_TRANSFORMER_AVAILABLE = True
@@ -29,12 +26,9 @@ except ImportError:
     SPATIAL_TRANSFORMER_AVAILABLE = False
 
 class TorchCompile(scripts.Script):
-    # --- 步骤 2: 添加属性以保存原始方法 ---
     original_flux_forward = None
     original_unet_forward = None
-    original_spatial_transformer_forward = None # 新增属性
-
-    # 编译缓存和统计信息
+    original_spatial_transformer_forward = None
     compiled_models = {}
     compile_stats = {
         "total_compilations": 0, 
@@ -63,7 +57,6 @@ class TorchCompile(scripts.Script):
         return cls._logger
     
     def __init__(self):
-        # --- 步骤 3: 在初始化时保存所有原始方法 ---
         logger = self.get_logger()
         if FLUX_AVAILABLE and TorchCompile.original_flux_forward is None:
             TorchCompile.original_flux_forward = IntegratedFluxTransformer2DModel.inner_forward
@@ -71,12 +64,9 @@ class TorchCompile(scripts.Script):
         if UNET_AVAILABLE and TorchCompile.original_unet_forward is None:
             TorchCompile.original_unet_forward = IntegratedUNet2DConditionModel.forward
             logger.info("已保存 UNet 模型原始 forward ")
-        # 新增逻辑：保存 SpatialTransformer 的原始 forward
         if SPATIAL_TRANSFORMER_AVAILABLE and TorchCompile.original_spatial_transformer_forward is None:
             TorchCompile.original_spatial_transformer_forward = SpatialTransformer.forward
             logger.info("已保存 SpatialTransformer 原始 forward")
-            
-        # 初始化模型验证
         self._validate_model_compatibility()
     
     def _validate_model_compatibility(self):
@@ -108,7 +98,6 @@ class TorchCompile(scripts.Script):
             logger.info("CUDA 不可用，将使用 CPU")           
         return True
 
-    # --- 步骤 4: 添加新的“补丁”方法 ---
     @staticmethod
     def _patched_spatial_transformer_forward(self_module, x, context=None, transformer_options={}):
         """
@@ -125,7 +114,6 @@ class TorchCompile(scripts.Script):
         if not self_module.use_linear:
             x = self_module.proj_in(x)
 
-        # 核心修改点 1: 替换 rearrange
         x = x.view(b, x.shape[1], h * w).permute(0, 2, 1).contiguous()
         
         if self_module.use_linear:
@@ -138,7 +126,6 @@ class TorchCompile(scripts.Script):
         if self_module.use_linear:
             x = self_module.proj_out(x)
 
-        # 核心修改点 2: 替换 rearrange
         x = x.permute(0, 2, 1).contiguous().view(b, x.shape[2], h, w)
         
         if not self_module.use_linear:
@@ -198,27 +185,23 @@ class TorchCompile(scripts.Script):
         return scripts.AlwaysVisible
 
     def ui(self, is_img2img):
+        # UI部分与您提供的代码完全一致，此处不重复
         with InputAccordion(False, label=self.title()) as enabled:
             torch_compile_available = hasattr(torch, 'compile')
             if not torch_compile_available:
                 gr.Markdown("当前PyTorch版本不支持torch.compile，请升级到PyTorch 2.0+")
-            
             with gr.Row():
                 backend = gr.Dropdown(label="编译后端", choices=["inductor", "cudagraphs" ,"aot_eager", "nvfuser", "onnxrt", "tensorrt", "ipex"], value="inductor", scale=1, interactive=torch_compile_available)
                 mode = gr.Dropdown(label="编译模式", choices=["default", "reduce-overhead", "max-autotune"], value="max-autotune", scale=1, interactive=torch_compile_available)
-            
             with gr.Row():
                 dynamic = gr.Checkbox(label="动态形状编译", value=True, info="允许不同的输入形状使用同一个编译模型", interactive=torch_compile_available)
                 fullgraph = gr.Checkbox(label="完整图编译", value=False, info="强制编译整个计算图（可能会失败）", interactive=torch_compile_available)
-            
             with gr.Row():
                 compile_unet = gr.Checkbox(label="编译UNet/Transformer", value=True, info="编译主要的生成模型", interactive=torch_compile_available)
                 auto_clear = gr.Checkbox(label="自动清理缓存", value=False, info="模型切换时自动清理编译缓存", interactive=torch_compile_available)
-            
             with gr.Row():
                 clear_cache = gr.Button(value="清除编译缓存", size="sm", interactive=torch_compile_available)
                 show_stats = gr.Button(value="显示统计信息", size="sm", interactive=torch_compile_available)
-            
             status = gr.Textbox(label="状态", value="未启用" if torch_compile_available else "PyTorch版本不支持", interactive=False)
             
             def clear_compile_cache():
@@ -231,7 +214,7 @@ class TorchCompile(scripts.Script):
                     return f"已清除{count}个编译缓存并恢复所有方法。"
                 except Exception as e:
                     return f"清除缓存失败: {str(e)}"
-            
+
             def show_compile_stats():
                 try:
                     stats = TorchCompile.compile_stats
@@ -273,21 +256,12 @@ class TorchCompile(scripts.Script):
                         for i, info in enumerate(recent_infos, 1):
                             result += f"{i}. {info}\n"
                     return result
-                
                 except Exception as e:
                     return f"获取统计信息失败: {str(e)}"
             
             clear_cache.click(fn=clear_compile_cache, outputs=[status])
             show_stats.click(fn=show_compile_stats, outputs=[status])
         
-        enabled.do_not_save_to_config = True
-        backend.do_not_save_to_config = True
-        mode.do_not_save_to_config = True
-        dynamic.do_not_save_to_config = True
-        fullgraph.do_not_save_to_config = True
-        compile_unet.do_not_save_to_config = True
-        auto_clear.do_not_save_to_config = True
-
         self.infotext_fields = [
             (enabled, lambda d: d.get("compile_enabled", False)),
             (backend, "compile_backend"),
@@ -302,22 +276,19 @@ class TorchCompile(scripts.Script):
     def process(self, p, *args):
         enabled, backend, mode, dynamic, fullgraph, compile_unet, auto_clear = args
         self.restore_original_methods()
-        
         if enabled and hasattr(torch, 'compile'):
             compile_kwargs = {'backend': backend, 'mode': mode, 'dynamic': dynamic, 'fullgraph': fullgraph}
             setattr(TorchCompile, "compile_kwargs", compile_kwargs)
             setattr(TorchCompile, "compile_unet", compile_unet)
             setattr(TorchCompile, "auto_clear", auto_clear)
-
             if compile_unet:
                 self.apply_torch_compile(p, compile_kwargs)
 
     def apply_torch_compile(self, p, compile_kwargs):
-        """应用torch.compile到模型 (修正版)"""
+        """应用torch.compile到模型 (最终修正版)"""
         logger = self.get_logger()
         
-        # --- 步骤 5: 应用补丁 ---
-        # 在编译UNet模型前，先修补有问题的子模块
+        # 1. 在编译前，先修补有问题的子模块
         if SPATIAL_TRANSFORMER_AVAILABLE and SpatialTransformer.forward is TorchCompile.original_spatial_transformer_forward:
             logger.info("为兼容torch.compile，正在修补 SpatialTransformer.forward...")
             SpatialTransformer.forward = self._patched_spatial_transformer_forward
@@ -325,16 +296,56 @@ class TorchCompile(scripts.Script):
         try:
             model_hash = self._generate_model_hash(p.sd_model, compile_kwargs)
             cache_key = f"{model_hash}"
-            
             if cache_key in TorchCompile.compiled_models:
                 logger.info("使用已编译的模型缓存")
                 TorchCompile.compile_stats["cache_hits"] += 1
                 return
 
-            is_flux = any(isinstance(m, IntegratedFluxTransformer2DModel) for m in p.sd_model.modules())
-            model_type = "flux" if is_flux else "unet"
+            # 2. 恢复您正确的模型检测逻辑
+            model_type = "unknown"
+            is_flux = False
+            flux_instances, unet_instances = [], []
+            model_to_search = p.sd_model
+
+            if hasattr(model_to_search, 'forge_objects'):
+                logger.info("检测到 Forge 环境，正在遍历 forge_objects...")
+                forge_objects = model_to_search.forge_objects
+                modules_to_check = [
+                    ('unet', getattr(forge_objects, 'unet', None)),
+                    ('clip', getattr(forge_objects, 'clip', None)),
+                    ('vae', getattr(forge_objects, 'vae', None)),
+                    ('clipvision', getattr(forge_objects, 'clipvision', None)),
+                ]
+                for obj_name, obj in modules_to_check:
+                    if obj is None: continue
+                    modules_in_obj = []
+                    if hasattr(obj, 'model') and hasattr(obj.model, 'named_modules'):
+                         modules_in_obj = obj.model.named_modules()
+                    elif hasattr(obj, 'named_modules'):
+                         modules_in_obj = obj.named_modules()
+                    for name, module in modules_in_obj:
+                        if isinstance(module, IntegratedFluxTransformer2DModel):
+                            flux_instances.append(module)
+                        elif isinstance(module, IntegratedUNet2DConditionModel):
+                            unet_instances.append(module)
+            
+            if flux_instances:
+                model_type, is_flux = "flux", True
+            elif unet_instances:
+                model_type = "unet"
+            else: # 如果在forge_objects中没找到，进行回退检查
+                logger.warning("在 forge_objects 中未找到已知模型类型，将回退到基本检测。")
+                if hasattr(p.sd_model, 'model') and hasattr(p.sd_model.model, 'diffusion_model'):
+                    inner_model = p.sd_model.model.diffusion_model
+                    if isinstance(inner_model, IntegratedFluxTransformer2DModel):
+                        model_type, is_flux = "flux", True
+                    elif isinstance(inner_model, IntegratedUNet2DConditionModel):
+                        model_type = "unet"
+
+            logger.info(f"检测到模型类型: {model_type}")
+            
             safe_kwargs = self._get_safe_compile_kwargs(compile_kwargs, model_type)
-            logger.info(f"开始编译模型 (类型: {model_type}, 后端: {safe_kwargs['backend']}, 模式: {safe_kwargs['mode']})")
+            logger.info(f"开始编译模型 (后端: {safe_kwargs['backend']}, 模式: {safe_kwargs['mode']})")
             
             start_time = time.time()
             success = False
@@ -371,20 +382,13 @@ class TorchCompile(scripts.Script):
             return False
 
         try:
-            # 编译原始的forward方法。当Dynamo追踪这个函数时，它内部对
-            # SpatialTransformer的调用会找到我们已经打过补丁的新方法。
             target_function = TorchCompile.original_unet_forward
-            
             compiled_fn = torch.compile(target_function, **compile_kwargs)
-            
-            # 将UNet类的forward方法替换为编译后的版本
             IntegratedUNet2DConditionModel.forward = compiled_fn
-            
             logger.info("UNet 模型 forward 类方法已成功替换为编译版本。")
             return True
         except Exception as e:
             logger.error(f"UNet模型编译失败: {e}\n{traceback.format_exc()}")
-            # 如果编译失败，必须恢复所有方法以避免处于损坏状态
             self.restore_original_methods()
             return False
 
@@ -405,24 +409,20 @@ class TorchCompile(scripts.Script):
                     self.restore_original_methods()
                 TorchCompile._last_model_id = current_model_id
 
-    # --- 步骤 6: 确保恢复所有原始方法 ---
     def restore_original_methods(self):
         """恢复所有被修改过的原始方法。"""
         logger = self.get_logger()
         
-        # 恢复 SpatialTransformer
         if SPATIAL_TRANSFORMER_AVAILABLE and TorchCompile.original_spatial_transformer_forward is not None:
             if SpatialTransformer.forward is not TorchCompile.original_spatial_transformer_forward:
                 SpatialTransformer.forward = TorchCompile.original_spatial_transformer_forward
                 logger.info("已恢复 SpatialTransformer 原始 forward")
 
-        # 恢复 UNet
         if UNET_AVAILABLE and TorchCompile.original_unet_forward is not None:
             if IntegratedUNet2DConditionModel.forward is not TorchCompile.original_unet_forward:
                 IntegratedUNet2DConditionModel.forward = TorchCompile.original_unet_forward
                 logger.info("已恢复 UNet 模型原始 forward")
 
-        # 恢复 Flux
         if FLUX_AVAILABLE and TorchCompile.original_flux_forward is not None:
             if IntegratedFluxTransformer2DModel.inner_forward is not TorchCompile.original_flux_forward:
                 IntegratedFluxTransformer2DModel.inner_forward = TorchCompile.original_flux_forward
