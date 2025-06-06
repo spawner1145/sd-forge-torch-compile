@@ -8,6 +8,7 @@ import hashlib
 import gradio as gr
 from modules import scripts, shared
 from modules.ui_components import InputAccordion
+from types import MethodType
 
 try:
     from backend.nn.flux import IntegratedFluxTransformer2DModel
@@ -16,7 +17,7 @@ except ImportError:
     FLUX_AVAILABLE = False
     
 try:
-    from backend.nn.unet import IntegratedUNet2DConditionModel
+    from backend.nn.unet import IntegratedUNet2DConditionModel, SpatialTransformer
     UNET_AVAILABLE = True
 except ImportError:
     UNET_AVAILABLE = False
@@ -24,6 +25,7 @@ except ImportError:
 class TorchCompile(scripts.Script):
     original_flux_forward = None
     original_unet_forward = None
+    original_spatial_transformer_forward = None
     compiled_models = {}
     compile_stats = {
         "total_compilations": 0, 
@@ -59,6 +61,9 @@ class TorchCompile(scripts.Script):
         if UNET_AVAILABLE and TorchCompile.original_unet_forward is None:
             TorchCompile.original_unet_forward = IntegratedUNet2DConditionModel.forward
             self.get_logger().info("已保存 UNet 模型原始 forward ")
+        if UNET_AVAILABLE and TorchCompile.original_spatial_transformer_forward is None:
+            TorchCompile.original_spatial_transformer_forward = SpatialTransformer.forward
+            self.get_logger().info("已保存 SpatialTransformer 原始 forward")
             
         # 初始化模型验证
         self._validate_model_compatibility()
@@ -109,6 +114,43 @@ class TorchCompile(scripts.Script):
             safe_kwargs['mode'] = 'default'
             
         return safe_kwargs
+    
+    @staticmethod
+    def _patched_spatial_transformer_forward(self_module, x, context=None, transformer_options={}):
+        """
+        这是用于替换 SpatialTransformer.forward 的新方法。
+        它用 torch.compile 友好的 view 和 permute 操作替换了 einops.rearrange。
+        """
+        if not isinstance(context, list):
+            context = [context] * len(self_module.transformer_blocks)
+        
+        b, c, h, w = x.shape
+        x_in = x
+        x = self_module.norm(x)
+
+        if not self_module.use_linear:
+            x = self_module.proj_in(x)
+
+        # 核心修改点 1: 替换 rearrange
+        x = x.view(b, x.shape[1], h * w).permute(0, 2, 1).contiguous()
+        
+        if self_module.use_linear:
+            x = self_module.proj_in(x)
+
+        for i, block in enumerate(self_module.transformer_blocks):
+            transformer_options["block_index"] = i
+            x = block(x, context=context[i], transformer_options=transformer_options)
+            
+        if self_module.use_linear:
+            x = self_module.proj_out(x)
+
+        # 核心修改点 2: 替换 rearrange
+        x = x.permute(0, 2, 1).contiguous().view(b, x.shape[2], h, w)
+        
+        if not self_module.use_linear:
+            x = self_module.proj_out(x)
+            
+        return x + x_in
     
     @staticmethod
     def _generate_model_hash(model, compile_kwargs):
@@ -351,6 +393,9 @@ class TorchCompile(scripts.Script):
     def apply_torch_compile(self, p, compile_kwargs):
         """应用torch.compile到模型"""
         logger = self.get_logger()
+        if UNET_AVAILABLE:
+            if SpatialTransformer.forward is TorchCompile.original_spatial_transformer_forward:
+                logger.info("为兼容torch.compile，正在修补 SpatialTransformer.forward...")
         
         try:
             # 生成缓存键
@@ -813,6 +858,10 @@ class TorchCompile(scripts.Script):
         """恢复原始的forward"""
         logger = self.get_logger()
         
+        # 恢复 SpatialTransformer
+        if UNET_AVAILABLE and TorchCompile.original_spatial_transformer_forward is not None:
+            SpatialTransformer.forward = TorchCompile.original_spatial_transformer_forward
+            logger.info("已恢复 SpatialTransformer 原始 forward")
         if FLUX_AVAILABLE and TorchCompile.original_flux_forward is not None:
             IntegratedFluxTransformer2DModel.inner_forward = TorchCompile.original_flux_forward
             logger.info("已恢复 Flux 模型原始 inner_forward ")
